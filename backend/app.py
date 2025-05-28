@@ -7,6 +7,8 @@ from datetime import datetime, timedelta
 from dotenv import load_dotenv
 import concurrent.futures
 import logging
+import uuid
+import numpy as np
 
 # Set up logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
@@ -20,6 +22,7 @@ from analysis.technical_analysis import TechnicalAnalyzer
 from analysis.signal_generator import SignalGenerator
 # Import automated trading if needed
 # from trading.automated_trading import AutomatedTrader
+from trading.virtual_trading import VirtualTradingAccount
 
 # Load environment variables
 load_dotenv()
@@ -34,6 +37,9 @@ market_data_fetcher = MarketDataFetcher(exchange_id='binance')
 news_fetcher = NewsFetcher()
 technical_analyzer = TechnicalAnalyzer()
 signal_generator = SignalGenerator()
+
+# Initialize the virtual trading account
+virtual_account = VirtualTradingAccount(initial_balance=10000.0, storage=storage)
 
 # New class for market data operations
 class MarketDataHelper:
@@ -253,27 +259,38 @@ def get_trading_signals():
         signals_df = storage.client.query(query).to_dataframe()
         
         if signals_df.empty:
-            return jsonify([])
+            # Return mock data for demonstration
+            mock_signals = generate_mock_signals()
+            return jsonify(mock_signals)
         
         # Convert to list of dictionaries for JSON response
         result = []
         for _, row in signals_df.iterrows():
-            result.append({
+            signal_dict = {
                 'id': str(row.name),  # Use row index as ID
                 'symbol': row['symbol'],
                 'timestamp': row['timestamp'].isoformat(),
                 'signal': row['signal'],
-                'price': float(row['price']) if 'price' in row else None,
-                'technical_score': float(row['technical_score']) if 'technical_score' in row else None,
-                'sentiment_score': float(row['sentiment_score']) if 'sentiment_score' in row else None,
-                'confidence': float(row['confidence']) if 'confidence' in row else None,
-                'indicators': row['indicators'] if 'indicators' in row else None
-            })
+                'price': float(row['price']) if 'price' in row and not pd.isna(row['price']) else None,
+                'technical_score': float(row['technical_score']) if 'technical_score' in row and not pd.isna(row['technical_score']) else None,
+                'sentiment_score': float(row['sentiment_score']) if 'sentiment_score' in row and not pd.isna(row['sentiment_score']) else None,
+                'confidence': float(row['confidence']) if 'confidence' in row and not pd.isna(row['confidence']) else None,
+                'indicators': row['indicators'] if 'indicators' in row else None,
+                'take_profit': float(row['take_profit']) if 'take_profit' in row and not pd.isna(row['take_profit']) else None,
+                'stop_loss': float(row['stop_loss']) if 'stop_loss' in row and not pd.isna(row['stop_loss']) else None,
+                'pattern': row['pattern'] if 'pattern' in row and not pd.isna(row['pattern']) else None,
+                'trade_status': row['trade_status'] if 'trade_status' in row and not pd.isna(row['trade_status']) else 'Active',
+                'expiry_time': row['expiry_time'].isoformat() if 'expiry_time' in row and not pd.isna(row['expiry_time']) else None
+            }
+            
+            result.append(signal_dict)
         
         return jsonify(result)
     except Exception as e:
         logger.error(f"Error fetching trading signals: {e}")
-        return jsonify([])
+        # Return mock data on error
+        mock_signals = generate_mock_signals()
+        return jsonify(mock_signals)
 
 @app.route('/api/transactions', methods=['GET'])
 def get_transactions():
@@ -470,7 +487,19 @@ def get_available_coins():
             {"value": "ALGO/USDT", "label": "Algorand (ALGO/USDT)"},
             {"value": "FIL/USDT", "label": "Filecoin (FIL/USDT)"},
             {"value": "AAVE/USDT", "label": "Aave (AAVE/USDT)"},
-            {"value": "EGLD/USDT", "label": "Elrond (EGLD/USDT)"}
+            {"value": "EGLD/USDT", "label": "Elrond (EGLD/USDT)"},
+            # Add your new coins here
+            {"value": "CHAD/USDT", "label": "GigaChad (CHAD/USDT)"},
+            {"value": "BONE/USDT", "label": "Shib-Inu Bone (BONE/USDT)"},
+            {"value": "BONK/USDT", "label": "Bonk (BONK/USDT)"},
+            {"value": "ONE/USDT", "label": "Harmony (ONE/USDT)"},
+            {"value": "PI/USDT", "label": "Pi Network (PI/USDT)"},
+            {"value": "VET/USDT", "label": "VeChain (VET/USDT)"},
+            {"value": "DEEP/USDT", "label": "DeepOnion (DEEP/USDT)"},
+            {"value": "VRTL/USDT", "label": "Virtual (VRTL/USDT)"},
+            {"value": "BRETT/USDT", "label": "Brett (BRETT/USDT)"},
+            {"value": "PENGO/USDT", "label": "Pengo (PENGO/USDT)"},
+            {"value": "TURBO/USDT", "label": "Turbo (TURBO/USDT)"}
         ]
         return jsonify(coins)
     except Exception as e:
@@ -774,6 +803,334 @@ def get_collected_coins():
             "ADA/USDT", "DOGE/USDT", "SHIB/USDT", "PEPE/USDT", "MATIC/USDT"
         ]
         return jsonify(default_coins)
+
+@app.route('/api/virtual/balance', methods=['GET'])
+def get_virtual_balance():
+    """Get virtual account balance"""
+    try:
+        balances = virtual_account.get_all_balances()
+        
+        # Format for JSON response
+        result = []
+        for currency, amount in balances.items():
+            result.append({
+                "currency": currency,
+                "amount": float(amount)
+            })
+        
+        return jsonify(result)
+    except Exception as e:
+        logger.error(f"Error getting virtual balance: {e}")
+        return jsonify([{"currency": "USDT", "amount": 10000.0}])
+
+@app.route('/api/virtual/portfolio', methods=['GET'])
+def get_virtual_portfolio():
+    """Get virtual portfolio value"""
+    try:
+        # Get current prices for all symbols
+        symbols_param = request.args.get('symbols', '')
+        symbols = symbols_param.split(',') if symbols_param else []
+        
+        if not symbols:
+            # Get all collected coins
+            coins_response = get_collected_coins()
+            coins_data = coins_response.json
+            if isinstance(coins_data, list) and coins_data:
+                symbols = coins_data
+        
+        # Fetch current prices
+        prices = {}
+        for symbol in symbols:
+            try:
+                # Use the market-overview endpoint to get current prices
+                response = requests.get(f"http://localhost:5000/api/market-overview?symbols={symbol}")
+                data = response.json()
+                if data and isinstance(data, list) and len(data) > 0:
+                    prices[symbol] = data[0]['price']
+            except Exception as e:
+                logger.error(f"Error fetching price for {symbol}: {e}")
+        
+        # Get portfolio value
+        portfolio = virtual_account.get_portfolio_value(prices)
+        
+        return jsonify(portfolio)
+    except Exception as e:
+        logger.error(f"Error getting virtual portfolio: {e}")
+        return jsonify({
+            "total_value": 10000.0,
+            "holdings": [],
+            "usdt_balance": 10000.0,
+            "profit_loss": 0.0,
+            "profit_loss_pct": 0.0,
+            "initial_value": 10000.0
+        })
+
+@app.route('/api/virtual/trade', methods=['POST'])
+def execute_virtual_trade():
+    """Execute a virtual trade"""
+    try:
+        data = request.json
+        symbol = data.get('symbol')
+        order_type = data.get('type')
+        amount = float(data.get('amount', 0))
+        price = float(data.get('price', 0))
+        
+        if not symbol or not order_type or amount <= 0 or price <= 0:
+            return jsonify({
+                "success": False,
+                "message": "Invalid trade parameters. Required: symbol, type, amount, price."
+            }), 400
+        
+        # Execute the trade
+        result = virtual_account.place_order(symbol, order_type, amount, price)
+        
+        return jsonify(result)
+    except Exception as e:
+        logger.error(f"Error executing virtual trade: {e}")
+        return jsonify({
+            "success": False,
+            "message": f"Error executing trade: {str(e)}"
+        }), 500
+
+@app.route('/api/virtual/orders', methods=['GET'])
+def get_virtual_orders():
+    """Get virtual order history"""
+    try:
+        symbol = request.args.get('symbol')
+        limit = int(request.args.get('limit', 50))
+        
+        orders = virtual_account.get_order_history(symbol, limit)
+        
+        # Format timestamps for JSON
+        for order in orders:
+            if isinstance(order['timestamp'], datetime):
+                order['timestamp'] = order['timestamp'].isoformat()
+        
+        return jsonify(orders)
+    except Exception as e:
+        logger.error(f"Error getting virtual orders: {e}")
+        return jsonify([])
+
+@app.route('/api/virtual/trades', methods=['GET'])
+def get_virtual_trades():
+    """Get virtual trade history"""
+    try:
+        symbol = request.args.get('symbol')
+        limit = int(request.args.get('limit', 50))
+        
+        trades = virtual_account.get_trades(symbol, limit)
+        
+        # Format timestamps for JSON
+        for trade in trades:
+            if isinstance(trade['timestamp'], datetime):
+                order['timestamp'] = order['timestamp'].isoformat()
+        
+        return jsonify(trades)
+    except Exception as e:
+        logger.error(f"Error getting virtual trades: {e}")
+        return jsonify([])
+
+@app.route('/api/virtual/reset', methods=['POST'])
+def reset_virtual_account():
+    """Reset virtual trading account"""
+    try:
+        result = virtual_account.reset_account()
+        return jsonify(result)
+    except Exception as e:
+        logger.error(f"Error resetting virtual account: {e}")
+        return jsonify({
+            "success": False,
+            "message": f"Error resetting account: {str(e)}"
+        }), 500
+
+@app.route('/api/watchlist', methods=['GET'])
+def get_user_watchlist():
+    """Get user's watchlist"""
+    try:
+        # In a real app, you would get the user ID from authentication
+        # For now, we'll use a default user ID
+        user_id = request.args.get('user_id', 'default_user')
+        
+        # Get watchlist from storage
+        watchlist_df = storage.get_watchlist(user_id)
+        
+        if watchlist_df.empty:
+            # Return empty list if no watchlist items
+            return jsonify([])
+        
+        # Extract symbols
+        symbols = watchlist_df['symbol'].tolist()
+        
+        # Get market data for these symbols
+        symbols_param = ','.join(symbols)
+        response = requests.get(f"http://localhost:5000/api/market-overview?symbols={symbols_param}")
+        market_data = response.json()
+        
+        # Return the market data
+        return jsonify(market_data)
+    except Exception as e:
+        logger.error(f"Error getting watchlist: {e}")
+        return jsonify([])
+
+@app.route('/api/watchlist/add', methods=['POST'])
+def add_to_watchlist():
+    """Add symbol to watchlist"""
+    try:
+        data = request.json
+        symbol = data.get('symbol')
+        user_id = data.get('user_id', 'default_user')
+        
+        if not symbol:
+            return jsonify({
+                "success": False,
+                "message": "Symbol is required."
+            }), 400
+        
+        # Add to watchlist
+        storage.store_watchlist_item(user_id, symbol)
+        
+        return jsonify({
+            "success": True,
+            "message": f"Added {symbol} to watchlist."
+        })
+    except Exception as e:
+        logger.error(f"Error adding to watchlist: {e}")
+        return jsonify({
+            "success": False,
+            "message": f"Error adding to watchlist: {str(e)}"
+        }), 500
+
+@app.route('/api/watchlist/remove', methods=['POST'])
+def remove_from_watchlist():
+    """Remove symbol from watchlist"""
+    try:
+        data = request.json
+        symbol = data.get('symbol')
+        user_id = data.get('user_id', 'default_user')
+        
+        if not symbol:
+            return jsonify({
+                "success": False,
+                "message": "Symbol is required."
+            }), 400
+        
+        # Remove from watchlist
+        success = storage.remove_watchlist_item(user_id, symbol)
+        
+        if success:
+            return jsonify({
+                "success": True,
+                "message": f"Removed {symbol} from watchlist."
+            })
+        else:
+            return jsonify({
+                "success": False,
+                "message": f"Failed to remove {symbol} from watchlist."
+            }), 500
+    except Exception as e:
+        logger.error(f"Error removing from watchlist: {e}")
+        return jsonify({
+            "success": False,
+            "message": f"Error removing from watchlist: {str(e)}"
+        }), 500
+
+@app.route('/api/watchlist/symbols', methods=['GET'])
+def get_watchlist_symbols():
+    """Get list of symbols in watchlist"""
+    try:
+        # In a real app, you would get the user ID from authentication
+        user_id = request.args.get('user_id', 'default_user')
+        
+        # Get watchlist from storage
+        watchlist_df = storage.get_watchlist(user_id)
+        
+        if watchlist_df.empty:
+            # Return empty list if no watchlist items
+            return jsonify([])
+        
+        # Extract symbols
+        symbols = watchlist_df['symbol'].tolist()
+        
+        return jsonify(symbols)
+    except Exception as e:
+        logger.error(f"Error getting watchlist symbols: {e}")
+        return jsonify([])
+
+def generate_mock_signals():
+    """Generate mock trading signals for demonstration"""
+    # Use UTC time to avoid timezone issues
+    current_time = datetime.utcnow()
+    logger.info(f"Generating mock signals with current UTC time: {current_time}")
+    
+    symbols = ["BTC/USDT", "ETH/USDT", "SOL/USDT", "XRP/USDT", "ADA/USDT", 
+               "DOGE/USDT", "SHIB/USDT", "PEPE/USDT", "MATIC/USDT", "LINK/USDT"]
+    
+    signals = []
+    
+    for i in range(10):
+        # Alternate between BUY and SELL signals
+        signal_type = "BUY" if i % 2 == 0 else "SELL"
+        
+        # Select a symbol
+        symbol = symbols[i % len(symbols)]
+        
+        # Generate a price based on the symbol
+        if symbol == "BTC/USDT":
+            price = 65000 + (np.random.random() * 5000)
+        elif symbol == "ETH/USDT":
+            price = 3500 + (np.random.random() * 500)
+        elif symbol == "SOL/USDT":
+            price = 140 + (np.random.random() * 20)
+        else:
+            price = 0.5 + (np.random.random() * 10)
+        
+        # Generate timestamp using current time with different offsets for each signal
+        # This ensures each signal has a unique and recent timestamp
+        # Use smaller offsets to make signals appear more recent
+        timestamp = current_time - timedelta(minutes=i*5)
+        
+        # Calculate take profit and stop loss
+        if signal_type == "BUY":
+            # For buy signals: TP is higher, SL is lower
+            take_profit = price * 1.05  # 5% profit target
+            stop_loss = price * 0.97    # 3% stop loss
+        else:  # SELL signal
+            # For sell signals: TP is lower, SL is higher
+            take_profit = price * 0.95  # 5% profit target
+            stop_loss = price * 1.03    # 3% stop loss
+        
+        # Determine trade status - vary the statuses
+        if i < 3:
+            trade_status = "Active"
+        elif i < 6:
+            trade_status = "Pending"
+        else:
+            trade_status = "Expired"
+        
+        # Set expiry time
+        expiry_time = (timestamp + timedelta(hours=24)).isoformat()
+        
+        # Create signal object
+        signal = {
+            'id': str(uuid.uuid4()),
+            'symbol': symbol,
+            'timestamp': timestamp.isoformat(),
+            'signal': signal_type,
+            'price': float(price),
+            'technical_score': float(np.random.random() * 3),
+            'sentiment_score': float((np.random.random() * 2) - 1),  # -1 to 1
+            'confidence': float(0.5 + (np.random.random() * 0.5)),  # 0.5 to 1.0
+            'indicators': "RSI, MACD, SMA20, Bollinger Bands",
+            'take_profit': float(take_profit),
+            'stop_loss': float(stop_loss),
+            'pattern': None,  # We're not using patterns anymore
+            'trade_status': trade_status,
+            'expiry_time': expiry_time
+        }
+        
+        signals.append(signal)
+    
+    return signals
 
 if __name__ == '__main__':
     app.run(debug=True, host='0.0.0.0', port=5000)

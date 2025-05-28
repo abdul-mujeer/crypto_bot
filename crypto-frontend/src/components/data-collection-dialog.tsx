@@ -28,8 +28,14 @@ interface CollectionStatus {
   message: string
 }
 
-export function DataCollectionDialog() {
-  const [open, setOpen] = useState(false)
+interface DataCollectionDialogProps {
+  open?: boolean
+  onOpenChange?: (open: boolean) => void
+}
+
+export function DataCollectionDialog({ open, onOpenChange }: DataCollectionDialogProps) {
+  // Remove this line:
+  // const [open, setOpen] = useState(false)
   const [availableCoins, setAvailableCoins] = useState<CoinOption[]>([])
   const [selectedCoins, setSelectedCoins] = useState<string[]>([])
   const [selectedTimeframe, setSelectedTimeframe] = useState("1d")
@@ -175,7 +181,7 @@ export function DataCollectionDialog() {
   }
 
   return (
-    <Dialog open={open} onOpenChange={setOpen}>
+    <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogTrigger asChild>
         <Button variant="default">
           <Database className="mr-2 h-4 w-4" />
@@ -261,7 +267,7 @@ export function DataCollectionDialog() {
         </div>
 
         <DialogFooter>
-          <Button variant="outline" onClick={() => setOpen(false)}>
+          <Button variant="outline" onClick={() => onOpenChange(false)}>
             Cancel
           </Button>
           <Button onClick={handleCollectData} disabled={isLoading}>

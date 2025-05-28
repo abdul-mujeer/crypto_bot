@@ -8,11 +8,12 @@ import { RecentSignals } from "@/components/recent-signals"
 import { NewsWidget } from "@/components/news-widget"
 import { DataCollectionStatus } from "@/components/data-collection-status"
 import { DataCollectionDialog } from "@/components/data-collection-dialog"
-// Import the Watchlist component
 import { Watchlist } from "@/components/watchlist"
+import { VirtualTradingHistory } from "@/components/virtual-trading-history"
 
 export function DashboardPage() {
-  const [activeTab, setActiveTab] = useState("market")
+  const [activeTab, setActiveTab] = useState("chart")
+  const [dataDialogOpen, setDataDialogOpen] = useState(false)
 
   // Listen for data collection events
   useEffect(() => {
@@ -27,13 +28,24 @@ export function DashboardPage() {
     }
   }, [])
 
-  // Update the return statement to include the Watchlist on the right side
-  // Find the existing return statement and replace it with this:
+  // Listen for data collection dialog open event
+  useEffect(() => {
+    const handleOpenDialog = () => {
+      setDataDialogOpen(true)
+    }
+
+    window.addEventListener("openDataCollectionDialog", handleOpenDialog)
+
+    return () => {
+      window.removeEventListener("openDataCollectionDialog", handleOpenDialog)
+    }
+  }, [])
+
   return (
     <div className="grid gap-6">
       <div className="flex justify-between items-center">
         <h1 className="text-2xl font-bold">Crypto Trading Dashboard</h1>
-        <DataCollectionDialog />
+        <DataCollectionDialog open={dataDialogOpen} onOpenChange={setDataDialogOpen} />
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-4 gap-6">
@@ -43,6 +55,7 @@ export function DashboardPage() {
             <TabsList>
               <TabsTrigger value="chart">Chart Analysis</TabsTrigger>
               <TabsTrigger value="signals">Trading Signals</TabsTrigger>
+              <TabsTrigger value="trading">Virtual Trading</TabsTrigger>
               <TabsTrigger value="news">News & Sentiment</TabsTrigger>
               <TabsTrigger value="data">Data Collection</TabsTrigger>
             </TabsList>
@@ -59,6 +72,9 @@ export function DashboardPage() {
                   <RecentSignals />
                 </CardContent>
               </Card>
+            </TabsContent>
+            <TabsContent value="trading" className="space-y-4">
+              <VirtualTradingHistory />
             </TabsContent>
             <TabsContent value="news" className="space-y-4">
               <Card>

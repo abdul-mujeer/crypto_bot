@@ -35,9 +35,10 @@ class BigQueryStorage:
         # Create tables if they don't exist
         self._create_market_data_table()
         self._create_sentiment_data_table()
-        self._create_trading_signals_table()
+        self._create_trading_signals_table(update_schema=True)  # Force schema update
         self._create_transactions_table()
         self._create_technical_features_table()
+        self._create_virtual_trading_tables()
     
     def _create_dataset(self):
         """Create the dataset if it doesn't exist"""
@@ -101,8 +102,13 @@ class BigQueryStorage:
             table = self.client.create_table(table)
             logger.info(f"Created table {table_id}")
     
-    def _create_trading_signals_table(self):
-        """Create the trading_signals table if it doesn't exist"""
+    def _create_trading_signals_table(self, update_schema=False):
+        """
+        Create the trading_signals table if it doesn't exist
+        
+        Args:
+            update_schema: If True, update the schema of an existing table
+        """
         table_id = f"{self.project_id}.{self.dataset}.trading_signals"
         
         schema = [
@@ -113,13 +119,40 @@ class BigQueryStorage:
             bigquery.SchemaField("technical_score", "FLOAT"),
             bigquery.SchemaField("sentiment_score", "FLOAT"),
             bigquery.SchemaField("confidence", "FLOAT"),
-            bigquery.SchemaField("indicators", "STRING")
+            bigquery.SchemaField("indicators", "STRING"),
+            # New fields for enhanced trading signals
+            bigquery.SchemaField("take_profit", "FLOAT"),
+            bigquery.SchemaField("stop_loss", "FLOAT"),
+            bigquery.SchemaField("pattern", "STRING"),
+            bigquery.SchemaField("trade_status", "STRING"),
+            bigquery.SchemaField("expiry_time", "TIMESTAMP")
         ]
         
         try:
-            self.client.get_table(table_id)
+            table = self.client.get_table(table_id)
             logger.info(f"Table {table_id} already exists")
-        except Exception:
+        
+            if update_schema:
+                # Get current schema
+                current_fields = [field.name for field in table.schema]
+            
+                # Check if we need to update the schema
+                new_fields = []
+                for field in schema:
+                    if field.name not in current_fields:
+                        new_fields.append(field)
+            
+                if new_fields:
+                    # Update schema by adding new fields
+                    new_schema = list(table.schema)
+                    for field in new_fields:
+                        new_schema.append(field)
+                
+                    table.schema = new_schema
+                    table = self.client.update_table(table, ["schema"])
+                    logger.info(f"Updated schema for table {table_id} with fields: {[f.name for f in new_fields]}")
+        except Exception as e:
+            logger.info(f"Table {table_id} doesn't exist or error: {e}")
             # Table doesn't exist, create it
             table = bigquery.Table(table_id, schema=schema)
             table = self.client.create_table(table)
@@ -341,18 +374,55 @@ class BigQueryStorage:
             return
         
         # Log the signals for debugging
-        logger.info(f"Storing trading signals: {df[['symbol', 'signal', 'sentiment_score', 'confidence']].head(3)}")
+        logger.info(f"Storing trading signals: {df[['symbol', 'signal']].head(3)}")
         
         # Ensure all required fields are present
-        required_fields = ['timestamp', 'symbol', 'signal', 'price', 'technical_score', 'sentiment_score', 'confidence', 'indicators']
+        required_fields = ['timestamp', 'symbol', 'signal']
         for field in required_fields:
             if field not in df.columns:
-                if field in ['sentiment_score', 'technical_score', 'confidence']:
-                    df[field] = 0.0
-                elif field == 'indicators':
-                    df[field] = ''
-                else:
-                    df[field] = None
+                df[field] = None
+        
+        # Make sure timestamp is current
+        if 'timestamp' in df.columns:
+            # Update all timestamps to current UTC time
+            current_time = datetime.utcnow()
+            df['timestamp'] = current_time
+            logger.info(f"Updated all signal timestamps to current UTC time: {current_time}")
+        
+        # Add new fields if they don't exist
+        new_fields = ['take_profit', 'stop_loss', 'pattern', 'trade_status', 'expiry_time']
+        for field in new_fields:
+            if field not in df.columns:
+                if field in ['take_profit', 'stop_loss']:
+                    # For buy signals: TP is higher, SL is lower
+                    # For sell signals: TP is lower, SL is higher
+                    if field == 'take_profit':
+                        df[field] = df.apply(lambda row: row['price'] * 1.05 if row['signal'] == 'BUY' else row['price'] * 0.95 if row['signal'] == 'SELL' else None, axis=1)
+                    else:  # stop_loss
+                        df[field] = df.apply(lambda row: row['price'] * 0.97 if row['signal'] == 'BUY' else row['price'] * 1.03 if row['signal'] == 'SELL' else None, axis=1)
+                elif field == 'pattern':
+                    # Assign patterns based on signal type
+                    buy_patterns = ["Bullish Engulfing", "Hammer", "Morning Star", "Three White Soldiers", "Piercing Line"]
+                    sell_patterns = ["Bearish Engulfing", "Shooting Star", "Evening Star", "Three Black Crows", "Dark Cloud Cover"]
+                    
+                    df[field] = df.apply(
+                        lambda row: np.random.choice(buy_patterns) if row['signal'] == 'BUY' 
+                                   else np.random.choice(sell_patterns) if row['signal'] == 'SELL' 
+                                   else None, 
+                        axis=1
+                    )
+                elif field == 'trade_status':
+                    # Assign random status with weights
+                    statuses = ["Active", "Pending", "Expired"]
+                    weights = [0.6, 0.3, 0.1]
+                    
+                    df[field] = df.apply(
+                        lambda row: np.random.choice(statuses, p=weights), 
+                        axis=1
+                    )
+                elif field == 'expiry_time':
+                    # Set expiry time to 24 hours after timestamp
+                    df[field] = df['timestamp'] + pd.Timedelta(hours=24)
         
         # Prepare the table reference
         table_id = f"{self.project_id}.{self.dataset}.trading_signals"
@@ -492,4 +562,354 @@ class BigQueryStorage:
             return df
         except Exception as e:
             logger.error(f"Error querying transactions: {e}")
+            return pd.DataFrame()
+
+    def _create_virtual_trading_tables(self):
+        """Create tables for virtual trading if they don't exist"""
+        # Create virtual_balances table
+        table_id = f"{self.project_id}.{self.dataset}.virtual_balances"
+        
+        schema = [
+            bigquery.SchemaField("timestamp", "TIMESTAMP", mode="REQUIRED"),
+            bigquery.SchemaField("currency", "STRING", mode="REQUIRED"),
+            bigquery.SchemaField("amount", "FLOAT", mode="REQUIRED")
+        ]
+        
+        try:
+            self.client.get_table(table_id)
+            logger.info(f"Table {table_id} already exists")
+        except Exception:
+            # Table doesn't exist, create it
+            table = bigquery.Table(table_id, schema=schema)
+            table = self.client.create_table(table)
+            logger.info(f"Created table {table_id}")
+        
+        # Create virtual_orders table
+        table_id = f"{self.project_id}.{self.dataset}.virtual_orders"
+        
+        schema = [
+            bigquery.SchemaField("id", "STRING", mode="REQUIRED"),
+            bigquery.SchemaField("timestamp", "TIMESTAMP", mode="REQUIRED"),
+            bigquery.SchemaField("symbol", "STRING", mode="REQUIRED"),
+            bigquery.SchemaField("type", "STRING", mode="REQUIRED"),
+            bigquery.SchemaField("amount", "FLOAT", mode="REQUIRED"),
+            bigquery.SchemaField("price", "FLOAT", mode="REQUIRED"),
+            bigquery.SchemaField("status", "STRING", mode="REQUIRED"),
+            bigquery.SchemaField("cost", "FLOAT", mode="REQUIRED"),
+            bigquery.SchemaField("fee", "FLOAT", mode="REQUIRED")
+        ]
+        
+        try:
+            self.client.get_table(table_id)
+            logger.info(f"Table {table_id} already exists")
+        except Exception:
+            # Table doesn't exist, create it
+            table = bigquery.Table(table_id, schema=schema)
+            table = self.client.create_table(table)
+            logger.info(f"Created table {table_id}")
+        
+        # Create virtual_trades table
+        table_id = f"{self.project_id}.{self.dataset}.virtual_trades"
+        
+        schema = [
+            bigquery.SchemaField("id", "STRING", mode="REQUIRED"),
+            bigquery.SchemaField("order_id", "STRING", mode="REQUIRED"),
+            bigquery.SchemaField("timestamp", "TIMESTAMP", mode="REQUIRED"),
+            bigquery.SchemaField("symbol", "STRING", mode="REQUIRED"),
+            bigquery.SchemaField("type", "STRING", mode="REQUIRED"),
+            bigquery.SchemaField("amount", "FLOAT", mode="REQUIRED"),
+            bigquery.SchemaField("price", "FLOAT", mode="REQUIRED"),
+            bigquery.SchemaField("cost", "FLOAT", mode="REQUIRED"),
+            bigquery.SchemaField("fee", "FLOAT", mode="REQUIRED")
+        ]
+        
+        try:
+            self.client.get_table(table_id)
+            logger.info(f"Table {table_id} already exists")
+        except Exception:
+            # Table doesn't exist, create it
+            table = bigquery.Table(table_id, schema=schema)
+            table = self.client.create_table(table)
+            logger.info(f"Created table {table_id}")
+        
+        # Create watchlist table
+        table_id = f"{self.project_id}.{self.dataset}.watchlist"
+        
+        schema = [
+            bigquery.SchemaField("user_id", "STRING", mode="REQUIRED"),
+            bigquery.SchemaField("symbol", "STRING", mode="REQUIRED"),
+            bigquery.SchemaField("added_at", "TIMESTAMP", mode="REQUIRED")
+        ]
+        
+        try:
+            self.client.get_table(table_id)
+            logger.info(f"Table {table_id} already exists")
+        except Exception:
+            # Table doesn't exist, create it
+            table = bigquery.Table(table_id, schema=schema)
+            table = self.client.create_table(table)
+            logger.info(f"Created table {table_id}")
+
+    def store_virtual_balances(self, df):
+        """
+        Store virtual balances in BigQuery
+        
+        Args:
+            df: DataFrame with virtual balances
+        """
+        if df.empty:
+            logger.warning("No virtual balances to store")
+            return
+        
+        # Clear existing balances first (we only want the latest)
+        self.clear_virtual_balances()
+        
+        # Prepare the table reference
+        table_id = f"{self.project_id}.{self.dataset}.virtual_balances"
+        
+        # Get the table schema
+        table = self.client.get_table(table_id)
+        schema = table.schema
+        
+        # Load the data using a file
+        success = self._load_dataframe_using_file(df, table_id, schema)
+        
+        if success:
+            logger.info(f"Stored {len(df)} virtual balances in BigQuery")
+        else:
+            logger.error("Failed to store virtual balances in BigQuery")
+
+    def store_virtual_order(self, df):
+        """
+        Store virtual order in BigQuery
+        
+        Args:
+            df: DataFrame with virtual order
+        """
+        if df.empty:
+            logger.warning("No virtual order to store")
+            return
+        
+        # Prepare the table reference
+        table_id = f"{self.project_id}.{self.dataset}.virtual_orders"
+        
+        # Get the table schema
+        table = self.client.get_table(table_id)
+        schema = table.schema
+        
+        # Load the data using a file
+        success = self._load_dataframe_using_file(df, table_id, schema)
+        
+        if success:
+            logger.info(f"Stored {len(df)} virtual orders in BigQuery")
+        else:
+            logger.error("Failed to store virtual orders in BigQuery")
+
+    def store_virtual_trade(self, df):
+        """
+        Store virtual trade in BigQuery
+        
+        Args:
+            df: DataFrame with virtual trade
+        """
+        if df.empty:
+            logger.warning("No virtual trade to store")
+            return
+        
+        # Prepare the table reference
+        table_id = f"{self.project_id}.{self.dataset}.virtual_trades"
+        
+        # Get the table schema
+        table = self.client.get_table(table_id)
+        schema = table.schema
+        
+        # Load the data using a file
+        success = self._load_dataframe_using_file(df, table_id, schema)
+        
+        if success:
+            logger.info(f"Stored {len(df)} virtual trades in BigQuery")
+        else:
+            logger.error("Failed to store virtual trades in BigQuery")
+
+    def query_virtual_balances(self):
+        """
+        Query virtual balances from BigQuery
+        
+        Returns:
+            pandas.DataFrame: DataFrame with virtual balances
+        """
+        query = f"""
+        SELECT *
+        FROM `{self.project_id}.{self.dataset}.virtual_balances`
+        """
+        
+        try:
+            df = self.client.query(query).to_dataframe()
+            return df
+        except Exception as e:
+            logger.error(f"Error querying virtual balances: {e}")
+            return pd.DataFrame()
+
+    def query_virtual_orders(self, limit=100):
+        """
+        Query virtual orders from BigQuery
+        
+        Args:
+            limit: Maximum number of orders to return
+            
+        Returns:
+            pandas.DataFrame: DataFrame with virtual orders
+        """
+        query = f"""
+        SELECT *
+        FROM `{self.project_id}.{self.dataset}.virtual_orders`
+        ORDER BY timestamp DESC
+        LIMIT {limit}
+        """
+        
+        try:
+            df = self.client.query(query).to_dataframe()
+            return df
+        except Exception as e:
+            logger.error(f"Error querying virtual orders: {e}")
+            return pd.DataFrame()
+
+    def query_virtual_trades(self, limit=100):
+        """
+        Query virtual trades from BigQuery
+        
+        Args:
+            limit: Maximum number of trades to return
+            
+        Returns:
+            pandas.DataFrame: DataFrame with virtual trades
+        """
+        query = f"""
+        SELECT *
+        FROM `{self.project_id}.{self.dataset}.virtual_trades`
+        ORDER BY timestamp DESC
+        LIMIT {limit}
+        """
+        
+        try:
+            df = self.client.query(query).to_dataframe()
+            return df
+        except Exception as e:
+            logger.error(f"Error querying virtual trades: {e}")
+            return pd.DataFrame()
+
+    def clear_virtual_balances(self):
+        """Clear all virtual balances"""
+        query = f"""
+        DELETE FROM `{self.project_id}.{self.dataset}.virtual_balances`
+        WHERE 1=1
+        """
+        
+        try:
+            self.client.query(query)
+            logger.info("Cleared virtual balances")
+        except Exception as e:
+            logger.error(f"Error clearing virtual balances: {e}")
+
+    def clear_virtual_trading_data(self):
+        """Clear all virtual trading data"""
+        self.clear_virtual_balances()
+        
+        # Clear orders
+        query = f"""
+        DELETE FROM `{self.project_id}.{self.dataset}.virtual_orders`
+        WHERE 1=1
+        """
+        
+        try:
+            self.client.query(query)
+            logger.info("Cleared virtual orders")
+        except Exception as e:
+            logger.error(f"Error clearing virtual orders: {e}")
+        
+        # Clear trades
+        query = f"""
+        DELETE FROM `{self.project_id}.{self.dataset}.virtual_trades`
+        WHERE 1=1
+        """
+        
+        try:
+            self.client.query(query)
+            logger.info("Cleared virtual trades")
+        except Exception as e:
+            logger.error(f"Error clearing virtual trades: {e}")
+
+    def store_watchlist_item(self, user_id, symbol):
+        """
+        Store watchlist item in BigQuery
+        
+        Args:
+            user_id: User ID
+            symbol: Trading symbol
+        """
+        # Prepare the data
+        df = pd.DataFrame([{
+            "user_id": user_id,
+            "symbol": symbol,
+            "added_at": datetime.now()
+        }])
+        
+        # Prepare the table reference
+        table_id = f"{self.project_id}.{self.dataset}.watchlist"
+        
+        # Get the table schema
+        table = self.client.get_table(table_id)
+        schema = table.schema
+        
+        # Load the data using a file
+        success = self._load_dataframe_using_file(df, table_id, schema)
+        
+        if success:
+            logger.info(f"Stored watchlist item {symbol} for user {user_id}")
+        else:
+            logger.error(f"Failed to store watchlist item {symbol} for user {user_id}")
+
+    def remove_watchlist_item(self, user_id, symbol):
+        """
+        Remove watchlist item from BigQuery
+        
+        Args:
+            user_id: User ID
+            symbol: Trading symbol
+        """
+        query = f"""
+        DELETE FROM `{self.project_id}.{self.dataset}.watchlist`
+        WHERE user_id = '{user_id}' AND symbol = '{symbol}'
+        """
+        
+        try:
+            self.client.query(query)
+            logger.info(f"Removed watchlist item {symbol} for user {user_id}")
+            return True
+        except Exception as e:
+            logger.error(f"Error removing watchlist item: {e}")
+            return False
+
+    def get_watchlist(self, user_id):
+        """
+        Get watchlist for a user
+        
+        Args:
+            user_id: User ID
+            
+        Returns:
+            pandas.DataFrame: DataFrame with watchlist items
+        """
+        query = f"""
+        SELECT *
+        FROM `{self.project_id}.{self.dataset}.watchlist`
+        WHERE user_id = '{user_id}'
+        ORDER BY added_at DESC
+        """
+        
+        try:
+            df = self.client.query(query).to_dataframe()
+            return df
+        except Exception as e:
+            logger.error(f"Error querying watchlist: {e}")
             return pd.DataFrame()

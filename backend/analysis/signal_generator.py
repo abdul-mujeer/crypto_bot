@@ -1,7 +1,8 @@
 import pandas as pd
 import numpy as np
-from datetime import datetime
+from datetime import datetime, timedelta
 import logging
+import uuid
 
 # Set up logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
@@ -31,6 +32,13 @@ class SignalGenerator:
         
         # Initialize sentiment scores
         result['sentiment_score'] = 0.0
+        
+        # Add new fields for enhanced trading signals
+        result['take_profit'] = None
+        result['stop_loss'] = None
+        result['pattern'] = None
+        result['trade_status'] = None
+        result['expiry_time'] = None
         
         # Log the signals before sentiment
         logger.info(f"Technical signals before sentiment: {result[['symbol', 'signal', 'confidence']].head(3)}")
@@ -99,6 +107,50 @@ class SignalGenerator:
                     logger.info(f"No sentiment data found for {base_currency}")
         else:
             logger.warning("No news data available for sentiment analysis")
+        
+        # Add take profit and stop loss levels based on price and signal type
+        for idx, signal in result.iterrows():
+            price = signal['price']
+            if pd.isna(price) or price == 0:
+                continue
+                
+            # Calculate take profit and stop loss based on volatility or fixed percentage
+            # For simplicity, we'll use fixed percentages here
+            if signal['signal'] == 'BUY':
+                # For buy signals: TP is higher, SL is lower
+                result.at[idx, 'take_profit'] = price * 1.05  # 5% profit target
+                result.at[idx, 'stop_loss'] = price * 0.97    # 3% stop loss
+            else:  # SELL signal
+                # For sell signals: TP is lower, SL is higher
+                result.at[idx, 'take_profit'] = price * 0.95  # 5% profit target
+                result.at[idx, 'stop_loss'] = price * 1.03    # 3% stop loss
+            
+            # Add candlestick pattern information
+            patterns = [
+                "Bullish Engulfing", "Bearish Engulfing", "Hammer", "Shooting Star",
+                "Doji", "Morning Star", "Evening Star", "Harami", "Piercing Line",
+                "Dark Cloud Cover", "Three White Soldiers", "Three Black Crows"
+            ]
+            
+            # Randomly assign a pattern for demonstration purposes
+            # In a real system, this would be determined by actual pattern detection
+            if signal['signal'] == 'BUY':
+                bullish_patterns = ["Bullish Engulfing", "Hammer", "Morning Star", "Three White Soldiers", "Piercing Line"]
+                result.at[idx, 'pattern'] = np.random.choice(bullish_patterns)
+            else:
+                bearish_patterns = ["Bearish Engulfing", "Shooting Star", "Evening Star", "Three Black Crows", "Dark Cloud Cover"]
+                result.at[idx, 'pattern'] = np.random.choice(bearish_patterns)
+            
+            # Set trade status and expiry time
+            # For demonstration, we'll randomly assign statuses
+            # In a real system, this would be based on time elapsed since signal generation
+            statuses = ["Active", "Pending", "Expired"]
+            weights = [0.7, 0.2, 0.1]  # 70% active, 20% pending, 10% expired
+            result.at[idx, 'trade_status'] = np.random.choice(statuses, p=weights)
+            
+            # Set expiry time (24 hours from signal generation)
+            signal_time = pd.to_datetime(signal['timestamp'])
+            result.at[idx, 'expiry_time'] = (signal_time + timedelta(hours=24)).isoformat()
         
         # Log the signals after sentiment
         logger.info(f"Signals after sentiment: {result[['symbol', 'signal', 'sentiment_score', 'confidence']].head(3)}")

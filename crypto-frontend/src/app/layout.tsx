@@ -3,13 +3,13 @@ import type { Metadata } from "next"
 import { Inter } from "next/font/google"
 import "./globals.css"
 import { ThemeProvider } from "@/components/theme-provider"
-import { SidebarProvider } from "@/components/ui/sidebar"
+import { Toaster } from "@/components/ui/toaster"
 
 const inter = Inter({ subsets: ["latin"] })
 
 export const metadata: Metadata = {
-  title: "Crypto Trading Dashboard",
-  description: "Advanced cryptocurrency trading analysis and automation platform",
+  title: "Crypto Trading System",
+  description: "A comprehensive crypto trading system with data collection and analysis",
 }
 
 export default function RootLayout({
@@ -21,7 +21,8 @@ export default function RootLayout({
     <html lang="en" suppressHydrationWarning>
       <body className={inter.className}>
         <ThemeProvider attribute="class" defaultTheme="system" enableSystem disableTransitionOnChange>
-          <SidebarProvider>{children}</SidebarProvider>
+          {children}
+          <Toaster />
         </ThemeProvider>
       </body>
     </html>

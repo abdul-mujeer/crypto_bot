@@ -6,6 +6,7 @@ import { TechnicalIndicators } from "@/components/technical-indicators"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Loader2 } from "lucide-react"
+import { VirtualTradingPanel } from "@/components/virtual-trading-panel"
 
 const TIMEFRAMES = [
   { value: "1", label: "1 Minute" },
@@ -47,6 +48,7 @@ export function CryptoChartDashboard() {
   const [symbols, setSymbols] = useState(INITIAL_SYMBOLS)
   const [tradingSignal, setTradingSignal] = useState<TradingSignal | null>(null)
   const [loadingSignal, setLoadingSignal] = useState(true)
+  const [currentPrice, setCurrentPrice] = useState(0)
 
   // Fetch available symbols
   useEffect(() => {
@@ -100,7 +102,7 @@ export function CryptoChartDashboard() {
     }
   }, [])
 
-  // Fetch trading signal for the selected symbol
+  // Fetch trading signal and current price for the selected symbol
   useEffect(() => {
     async function fetchTradingSignal() {
       setLoadingSignal(true)
@@ -108,16 +110,26 @@ export function CryptoChartDashboard() {
         // Convert "BTCUSDT" to "BTC/USDT" for API
         const apiSymbol = selectedSymbol.replace("USDT", "/USDT")
 
-        const response = await fetch("http://localhost:5000/api/trading-signals")
-        const data = await response.json()
+        // Fetch trading signal
+        const signalResponse = await fetch("http://localhost:5000/api/trading-signals")
+        const signalData = await signalResponse.json()
 
         // Find the signal for the selected symbol
-        const signal = data.find((s: TradingSignal) => s.symbol === apiSymbol)
+        const signal = signalData.find((s: TradingSignal) => s.symbol === apiSymbol)
 
         if (signal) {
           setTradingSignal(signal)
+          setCurrentPrice(signal.price)
         } else {
           setTradingSignal(null)
+
+          // If no signal, fetch current price from market overview
+          const priceResponse = await fetch(`http://localhost:5000/api/market-overview?symbols=${apiSymbol}`)
+          const priceData = await priceResponse.json()
+
+          if (Array.isArray(priceData) && priceData.length > 0) {
+            setCurrentPrice(priceData[0].price)
+          }
         }
       } catch (error) {
         console.error("Error fetching trading signal:", error)
@@ -188,66 +200,71 @@ export function CryptoChartDashboard() {
           </CardContent>
         </Card>
 
-        <Card>
-          <CardHeader>
-            <CardTitle>Trading Recommendation</CardTitle>
-            <CardDescription>AI-powered trading recommendation</CardDescription>
-          </CardHeader>
-          <CardContent>
-            {loadingSignal ? (
-              <div className="flex items-center justify-center py-8">
-                <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
-              </div>
-            ) : tradingSignal ? (
-              <div className="space-y-4">
-                <div className="flex items-center justify-between">
-                  <span className="text-sm font-medium">Signal</span>
-                  <span
-                    className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium ${
-                      tradingSignal.signal === "BUY" ? "bg-green-100 text-green-800" : "bg-red-100 text-red-800"
-                    }`}
-                  >
-                    {tradingSignal.signal}
-                  </span>
+        <div className="space-y-4">
+          <Card>
+            <CardHeader>
+              <CardTitle>Trading Recommendation</CardTitle>
+              <CardDescription>AI-powered trading recommendation</CardDescription>
+            </CardHeader>
+            <CardContent>
+              {loadingSignal ? (
+                <div className="flex items-center justify-center py-8">
+                  <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
                 </div>
-                <div className="flex items-center justify-between">
-                  <span className="text-sm font-medium">Confidence</span>
-                  <span className="text-sm">{(tradingSignal.confidence * 100).toFixed(0)}%</span>
-                </div>
-                <div className="flex items-center justify-between">
-                  <span className="text-sm font-medium">Technical Score</span>
-                  <span className="text-sm">{tradingSignal.technical_score.toFixed(1)}/4.0</span>
-                </div>
-                <div className="flex items-center justify-between">
-                  <span className="text-sm font-medium">Sentiment Score</span>
-                  <span className="text-sm">{tradingSignal.sentiment_score.toFixed(2)}/1.0</span>
-                </div>
-                <div className="pt-2">
-                  <h4 className="text-sm font-medium mb-2">Contributing Indicators</h4>
-                  <div className="flex flex-wrap gap-1">
-                    {tradingSignal.indicators ? (
-                      tradingSignal.indicators.split(", ").map((indicator, index) => (
-                        <span
-                          key={index}
-                          className="inline-flex items-center rounded-full bg-blue-100 px-2 py-0.5 text-xs font-medium text-blue-800"
-                        >
-                          {indicator}
-                        </span>
-                      ))
-                    ) : (
-                      <span className="text-sm text-muted-foreground">No indicator data available</span>
-                    )}
+              ) : tradingSignal ? (
+                <div className="space-y-4">
+                  <div className="flex items-center justify-between">
+                    <span className="text-sm font-medium">Signal</span>
+                    <span
+                      className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium ${
+                        tradingSignal.signal === "BUY" ? "bg-green-100 text-green-800" : "bg-red-100 text-red-800"
+                      }`}
+                    >
+                      {tradingSignal.signal}
+                    </span>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <span className="text-sm font-medium">Confidence</span>
+                    <span className="text-sm">{(tradingSignal.confidence * 100).toFixed(0)}%</span>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <span className="text-sm font-medium">Technical Score</span>
+                    <span className="text-sm">{tradingSignal.technical_score.toFixed(1)}/4.0</span>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <span className="text-sm font-medium">Sentiment Score</span>
+                    <span className="text-sm">{tradingSignal.sentiment_score.toFixed(2)}/1.0</span>
+                  </div>
+                  <div className="pt-2">
+                    <h4 className="text-sm font-medium mb-2">Contributing Indicators</h4>
+                    <div className="flex flex-wrap gap-1">
+                      {tradingSignal.indicators ? (
+                        tradingSignal.indicators.split(", ").map((indicator, index) => (
+                          <span
+                            key={index}
+                            className="inline-flex items-center rounded-full bg-blue-100 px-2 py-0.5 text-xs font-medium text-blue-800"
+                          >
+                            {indicator}
+                          </span>
+                        ))
+                      ) : (
+                        <span className="text-sm text-muted-foreground">No indicator data available</span>
+                      )}
+                    </div>
                   </div>
                 </div>
-              </div>
-            ) : (
-              <div className="text-center py-8 text-muted-foreground">
-                <p>No trading signals available for {selectedSymbol.replace("USDT", "/USDT")}</p>
-                <p className="text-sm mt-2">Try collecting data for this symbol first</p>
-              </div>
-            )}
-          </CardContent>
-        </Card>
+              ) : (
+                <div className="text-center py-8 text-muted-foreground">
+                  <p>No trading signals available for {selectedSymbol.replace("USDT", "/USDT")}</p>
+                  <p className="text-sm mt-2">Try collecting data for this symbol first</p>
+                </div>
+              )}
+            </CardContent>
+          </Card>
+
+          {/* Add Virtual Trading Panel */}
+          <VirtualTradingPanel symbol={selectedSymbol.replace("USDT", "/USDT")} currentPrice={currentPrice} />
+        </div>
       </div>
     </div>
   )
